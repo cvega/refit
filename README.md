@@ -21,7 +21,8 @@ See the [runbook](docs/runbook.md) for commands, policy review, and recovery.
 
 ## Quick Start
 
-Requires **Go 1.23+**, **Git**, and **Git LFS** (tested with 3.7.1).
+Requires **Go 1.26+**, **Git**, and **Git LFS** (tested with 3.7.1).
+Use the latest patch of a [supported Go release](https://go.dev/doc/devel/release#policy).
 
 ```sh
 go build -o bin/refit ./cmd/refit
@@ -29,6 +30,9 @@ go build -o bin/refit ./cmd/refit
 ```
 
 ## Development
+
+CI tests the latest patches of Go's two supported release lines (`oldstable` and
+`stable`) on Ubuntu 24.04, printing the resolved toolchain version in each run.
 
 ```sh
 go test ./...

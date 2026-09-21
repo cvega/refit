@@ -11,20 +11,25 @@ permissions:
 jobs:
   test:
     name: Go ${{ matrix.go }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.23.x', 'stable']
+        go: ['oldstable', 'stable']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
+          check-latest: true
           cache: false
+      - name: Go version
+        run: go version
       - name: Install Git LFS
         run: |
           sudo apt-get update
