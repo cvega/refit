@@ -1,0 +1,14 @@
+/bin/
+/work/
+/inspection/
+/inspection-*/
+/prepared/
+/prepared-*/
+/reviewed-policy.json
+*.tar
+*.tar.gz
+*.tgz
+.env
+.env.*
+.DS_Store
+coverage.out
