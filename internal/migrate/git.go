@@ -223,6 +223,9 @@ func gitSafeConfig(data []byte) error {
 		if section == "remote" && (key == "url" || key == "fetch" || key == "pushurl") {
 			continue
 		}
+		if section == "remote" && key == "mirror" && (strings.EqualFold(value, "true") || strings.EqualFold(value, "false")) {
+			continue
+		}
 		// git-lfs writes this inert format marker on first use, even for fetch.
 		if section == "lfs" && key == "repositoryformatversion" && value == "0" {
 			continue
@@ -576,10 +579,11 @@ func gitUpdateRefs(ctx context.Context, repo, commands string) error {
 // destination must not exist and must be an absolute path outside the repo.
 // LFS payloads are read and written exclusively under repo/lfs/objects.
 //
-// Noncommit refs, notes/replace refs, symbolic non-HEAD refs, signed commits/tags,
+// Noncommit refs, notes/replace refs, symbolic non-HEAD refs,
 // commit/tag bodies over 1 MiB, detached HEAD, extended LFS pointers and unsafe
 // config/layouts fail closed. Unsigned nested tags retain their annotation bytes;
 // their OIDs are reported through RefsBefore/RefsAfter, not the commit-only map.
+// Signed commits/tags are preserved on no-op runs and rejected when rewriting.
 // SHA-1 files-backend repositories only. Unreachable objects and reflogs are
 // discarded on this disposable copy. No clone, fetch or push is performed.
 // Config is replaced with minimal bare config only after all preflight checks.
@@ -624,7 +628,7 @@ func RewriteGit(ctx context.Context, repo string, threshold int64, mapPath strin
 	}
 	tags := make(map[string][]byte)
 	if err := gitSmallObjects(ctx, repo, reachable, func(object gitObject, body []byte) error {
-		if object.Kind == "commit" {
+		if migrate && object.Kind == "commit" {
 			headers, _, _ := bytes.Cut(body, []byte("\n\n"))
 			for _, line := range bytes.Split(headers, []byte("\n")) {
 				if bytes.HasPrefix(line, []byte("gpgsig ")) || bytes.HasPrefix(line, []byte("gpgsig-sha256 ")) || bytes.HasPrefix(line, []byte("mergetag ")) {
@@ -633,7 +637,7 @@ func RewriteGit(ctx context.Context, repo string, threshold int64, mapPath strin
 			}
 		}
 		if object.Kind == "tag" {
-			if bytes.Contains(body, []byte("-----BEGIN PGP SIGNATURE-----")) || bytes.Contains(body, []byte("-----BEGIN SSH SIGNATURE-----")) || bytes.Contains(body, []byte("-----BEGIN SIGNED MESSAGE-----")) {
+			if migrate && (bytes.Contains(body, []byte("-----BEGIN PGP SIGNATURE-----")) || bytes.Contains(body, []byte("-----BEGIN SSH SIGNATURE-----")) || bytes.Contains(body, []byte("-----BEGIN SIGNED MESSAGE-----"))) {
 				return errors.New("signed annotated tags require an explicit signature policy before rewriting")
 			}
 			tags[object.OID] = body

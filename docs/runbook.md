@@ -32,6 +32,71 @@ Use `-threshold-bytes` if its exact boundary differs. No public 400 MiB restrict
 is applied. Separately confirm the destination's LFS single-object and storage
 limits; moving a blob to LFS does not exempt it from LFS limits.
 
+## Automated Workflow
+
+Use classic PATs in `GH_SOURCE_PAT` and `GH_PAT`. The automated command requires
+active organization-owner access: source scopes `repo`, `admin:org`; destination
+scopes `repo`, `admin:org`, `workflow`. It checks these before exporting or uploading.
+Delegated migrator roles are not supported by this preflight; use the individual
+commands below for a separately reviewed delegated-access workflow.
+
+Coordinate a quiet source window throughout both exports. They are not atomic,
+and the tool does not lock the source. Review the archive route and ensure
+destination automation will remain inactive before granting staging approval.
+
+```sh
+refit migrate -work work/MIGRATION \
+  -source-url https://github.com/SOURCE_ORG/REPO \
+  -target-org DEST_ORG -staging-repo REPO-staging \
+  -policy reviewed-policy.json \
+  -confirm-staging -archive-route-reviewed
+```
+
+For GHES, additionally supply `-source-api https://HOST/api/v3` and its matching
+source repository URL. For a data-residency destination, explicitly supply the
+approved `-target-api` and `-upload-api` origins. Source URLs use the web form,
+without a `.git` suffix. Endpoints authorize sending the corresponding PAT.
+
+The command saves configuration and export IDs, waits, downloads immutable originals,
+inspects archived history, fetches existing LFS payloads without cloning or fetching
+Git refs, prepares and verifies rewritten archives, submits the private import,
+waits for success, and uploads LFS. Payload downloads use the explicit source
+repository's standard LFS endpoint; use `-lfs-objects PATH` for an operator-provided
+cache if the source uses a different LFS service. The final staging review and
+Migration Log review remain manual; production promotion is never performed.
+
+If the archive schema is not reviewed yet, omit `-policy`. Refit stops after
+downloading and inspecting; review both original archives as described below,
+then resume with `-policy PATH`. Without the two approval flags it stops after
+preparation, before import. Approvals and policy/cache paths supplied on resume
+are saved, but credentials are not.
+
+```sh
+refit migrate -work work/MIGRATION
+# At a review gate, add the missing reviewed inputs:
+refit migrate -work work/MIGRATION -policy reviewed-policy.json \
+  -confirm-staging -archive-route-reviewed
+```
+
+Ordinary resumes need only `-work`; do not repeat source/destination flags.
+Each export/import wait defaults to 30 minutes with 10-second progress checks.
+Use `-wait-timeout` and `-poll-interval` to adjust. Interrupting or timing out does
+not cancel remote work. Resume uses saved IDs and completed checkpoints. Failed
+local preparations use fresh disposable directories, leaving diagnostics intact.
+
+Keep the workflow directory at its original path. `migration.lock` excludes
+concurrent runs; after a hard crash, verify no process is active before removing
+only the stale lock. An attempt without a saved export/import receipt is an
+uncertain remote write: automatic retry is blocked. Reconcile against GitHub,
+preserving all attempt files; do not delete them to force another submission.
+Saved valid receipts recover a missing completion checkpoint automatically.
+An interrupted download with an existing original but no completion record also
+requires reconciliation; do not overwrite that original. Export records,
+checksums, prepared-workspace references, and import/LFS receipts stay under `-work`.
+Treat this state as sensitive operational evidence under normal backup controls.
+
+The individual commands below remain available for inspection and explicit recovery.
+
 ## 1. Export And Download
 
 Coordinate a quiet source window for the two exports. The CLI deliberately does
@@ -156,6 +221,11 @@ It removes temporary refs, expires reflogs, and prunes obsolete/unreachable
 objects on the disposable copy. Metadata references to unmapped commits block
 completion. Review unreachable history before approving that pruning.
 
+When no reachable blobs need conversion, commit and tag objects (including signed
+objects) retain their original IDs and content. Signatures are preserved, not
+cryptographically validated. Signed history still blocks runs requiring conversion
+until an explicit signature policy is implemented.
+
 Repacking retains surviving member paths, order, and tar headers. LFS payloads,
 hooks, and reflogs are excluded from the Git archive. Local payloads remain for
 the later upload. The rewritten Git archive is re-extracted and its refs and
@@ -197,6 +267,19 @@ The returned migration ID is saved in `prepared/staging.json`:
 ```sh
 refit status -migration-id MIGRATION_NODE_ID
 ```
+
+To follow the saved import until it finishes, without copying its ID:
+
+```sh
+refit status -work prepared -wait
+```
+
+Progress and elapsed time go to stderr; the terminal result is JSON on stdout.
+The default polling interval is 10 seconds and the wait timeout is 30 minutes;
+adjust with `-poll-interval` and `-wait-timeout`. Failure returns a nonzero exit
+code. Interrupting or timing out stops only the local wait, not the remote import;
+resume with the same command. `stage -wait` also follows completion after saving
+the migration ID. Import success still requires the separate LFS upload below.
 
 Use the same `-target-api` when checking a nondefault destination. A successful
 GEI import does not mean LFS content is available yet.
@@ -252,7 +335,7 @@ Unsupported layouts fail closed rather than dropping refs or guessing:
 - Archive links/special files, duplicate/case-colliding paths, shallow/partial
   repositories, alternates, grafts, replace/notes refs, detached HEAD, noncommit
   refs, symbolic non-HEAD refs, and unrecognized archived Git config.
-- Signed commits/tags or embedded merge tags pending an explicit signature policy;
+- Signed commits/tags or embedded merge tags when conversion is needed, pending an explicit signature policy;
   SHA-256 Git repositories; commit/tag bodies above 1 MiB.
 - Extended/noncanonical LFS pointers; JSONL/NDJSON, duplicate JSON keys, JSON files
   above 64 MiB, and unknown metadata transformations.

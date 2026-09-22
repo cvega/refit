@@ -12,12 +12,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"refit/internal/migrate"
 )
 
 const usage = `refit COMMAND [flags]
 
+  migrate         Run or resume export, preparation, private import, and LFS upload
   export          Start a Git or metadata REST export; prints export ID
   export-status   Check one REST export
   download        Download an exported archive without exposing signed URLs
@@ -25,7 +27,7 @@ const usage = `refit COMMAND [flags]
   prepare         Rewrite disposable archives using a reviewed metadata policy
   verify          Verify prepared archives, refs, and every local LFS payload
   stage           Upload and enqueue a new private staging repository
-  status          Check a GEI import ID
+  status          Check a saved staging import or ID; -wait follows completion
   lfs-push        Upload verified LFS payloads after the staging import succeeds
 
 Run a command with -help for flags. Credentials: GH_SOURCE_PAT and GH_PAT.
@@ -50,6 +52,9 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 		return err
 	}
 	command := args[0]
+	if command == "migrate" {
+		return runMigration(ctx, args[1:], output, diagnostics)
+	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	work := flags.String("work", "", "new work directory for inspect/prepare; prepared directory for verify/stage/lfs-push")
@@ -74,11 +79,17 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 	confirm := flags.Bool("confirm-staging", false, "approve private staging import or LFS upload")
 	routeReviewed := flags.Bool("archive-route-reviewed", false, "confirm rewritten archive layout/schema and import route were reviewed")
 	migrationID := flags.String("migration-id", "", "GEI repository migration node ID")
+	wait := flags.Bool("wait", false, "wait for stage/status completion with progress on stderr")
+	waitTimeout := flags.Duration("wait-timeout", 30*time.Minute, "maximum wait; timeout does not cancel the remote migration")
+	pollInterval := flags.Duration("poll-interval", 10*time.Second, "interval between migration status checks")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if *wait && (command != "stage" && command != "status" || *waitTimeout <= 0 || *pollInterval <= 0) {
+		return errors.New("-wait requires stage/status and positive wait-timeout and poll-interval")
 	}
 	require := func(values ...string) error {
 		for _, value := range values {
@@ -219,10 +230,43 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 			_ = emit(state)
 			return err
 		}
-		return emit(state)
+		if err := emit(state); err != nil {
+			return err
+		}
+		if *wait {
+			return waitForImport(ctx, func(ctx context.Context) (string, string, error) {
+				return target.ImportStatus(ctx, id)
+			}, output, diagnostics, *pollInterval, *waitTimeout)
+		}
+		return nil
 	case "status":
+		if *work != "" {
+			if *migrationID != "" {
+				return errors.New("use either -work or -migration-id, not both")
+			}
+			var saved migrate.Staging
+			if err := migrate.ReadJSON(filepath.Join(*work, "staging.json"), &saved); err != nil {
+				return err
+			}
+			*migrationID = saved.MigrationID
+			explicitTarget := false
+			flags.Visit(func(flag *flag.Flag) {
+				if flag.Name == "target-api" {
+					explicitTarget = true
+				}
+			})
+			if explicitTarget && *targetAPI != saved.TargetAPI {
+				return errors.New("target-api conflicts with saved staging destination")
+			}
+			target.BaseURL = saved.TargetAPI
+		}
 		if err := require(*migrationID, target.Token); err != nil {
 			return err
+		}
+		if *wait {
+			return waitForImport(ctx, func(ctx context.Context) (string, string, error) {
+				return target.ImportStatus(ctx, *migrationID)
+			}, output, diagnostics, *pollInterval, *waitTimeout)
 		}
 		state, failure, err := target.ImportStatus(ctx, *migrationID)
 		if err != nil {
@@ -239,5 +283,43 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 		return migrate.PushStagingLFS(ctx, *work, target.Token)
 	default:
 		return errors.New("unknown command; run refit help")
+	}
+}
+
+func waitForImport(ctx context.Context, check func(context.Context) (string, string, error), output, diagnostics io.Writer, interval, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	started := time.Now()
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stopped waiting; remote migration is not canceled; resume with status -wait: %w", err)
+		}
+		state, failure, err := check(ctx)
+		if err != nil {
+			return fmt.Errorf("status check failed; resume with status -wait: %w", err)
+		}
+		if _, err := fmt.Fprintf(diagnostics, "[%s] Import %s\n", time.Since(started).Round(time.Second), state); err != nil {
+			return err
+		}
+		switch state {
+		case "SUCCEEDED", "FAILED", "FAILED_VALIDATION", "CANCELED", "CANCELLED":
+			if err := json.NewEncoder(output).Encode(map[string]string{"state": state, "failure": failure}); err != nil {
+				return err
+			}
+			if state != "SUCCEEDED" {
+				return errors.New("migration did not succeed; review the destination migration log")
+			}
+			_, err := fmt.Fprintln(diagnostics, "Import succeeded. LFS upload and staging review remain before completion.")
+			return err
+		case "NOT_STARTED", "QUEUED", "PENDING", "PENDING_VALIDATION", "VALIDATING", "WAITING", "IN_PROGRESS":
+		default:
+			return errors.New("unexpected migration state; stopped waiting")
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
 }

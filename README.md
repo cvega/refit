@@ -29,6 +29,11 @@ go build -o bin/refit ./cmd/refit
 ./bin/refit help
 ```
 
+Use `refit migrate -work work/MIGRATION ...` to export, wait, prepare, import,
+and upload LFS in one run. Resume with the same `-work` directory; credentials
+are never saved. See the [automated workflow](docs/runbook.md#automated-workflow)
+for approvals and policy review.
+
 ## Development
 
 CI tests the latest patches of Go's two supported release lines (`oldstable` and
@@ -42,7 +47,9 @@ go vet ./...
 
 ## Validation Status
 
-- **Passed:** local integration tests and mock HTTP tests.
-- **Pending:** customer archive compatibility and a live GEI staging import.
+- **Passed:** local integration and HTTP tests; a live private GEI no-conversion
+	control import with unchanged commit IDs and three existing LFS payload uploads.
+- **Pending:** live oversized-blob conversion, hidden-PR/metadata rewrites, customer
+	archive compatibility, and a live run of the new resumable coordinator.
 
 Review [supported layouts and limitations](docs/runbook.md#recovery-and-limitations) before use.

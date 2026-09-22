@@ -67,6 +67,40 @@ func apiTestRedacted(t *testing.T, err error, secrets ...string) {
 	}
 }
 
+func TestAPICheckMigrationAccess(t *testing.T) {
+	for _, scenario := range []struct {
+		name, scopes, role string
+		destination, valid bool
+	}{
+		{"source", "repo, admin:org", "admin", false, true},
+		{"destination", "repo, admin:org, workflow", "admin", true, true},
+		{"missing-workflow", "repo, admin:org", "admin", true, false},
+		{"missing-scopes", "", "admin", false, false},
+		{"not-owner", "repo, admin:org", "member", false, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			api, _ := apiTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+				apiTestAuth(t, request)
+				if request.Method != http.MethodGet {
+					t.Fatal("preflight must not write")
+				}
+				switch request.URL.Path {
+				case "/user":
+					writer.Header().Set("X-OAuth-Scopes", scenario.scopes)
+					fmt.Fprint(writer, `{"login":"operator"}`)
+				case "/orgs/example/memberships/operator":
+					json.NewEncoder(writer).Encode(map[string]string{"state": "active", "role": scenario.role})
+				default:
+					t.Errorf("unexpected path %s", request.URL.Path)
+				}
+			})
+			if err := api.CheckMigrationAccess(context.Background(), "example", scenario.destination); (err == nil) != scenario.valid {
+				t.Fatalf("unexpected preflight result: %v", err)
+			}
+		})
+	}
+}
+
 func TestAPIExport(t *testing.T) {
 	for _, kind := range []string{"git", "metadata"} {
 		t.Run(kind, func(t *testing.T) {
@@ -330,7 +364,6 @@ func TestAPIUploadProtocol(t *testing.T) {
 					nextPath = prefix + "/guid?part=1"
 					w.Header().Set("Location", nextPath)
 					w.WriteHeader(201)
-					fmt.Fprint(w, `{"uri":"gei://archive/guid"}`)
 				} else if offset < size {
 					if r.Method != "PATCH" || r.Header.Get("Content-Type") != "application/octet-stream" {
 						t.Errorf("chunk method/content type = %s/%s", r.Method, r.Header.Get("Content-Type"))
@@ -356,7 +389,8 @@ func TestAPIUploadProtocol(t *testing.T) {
 					if len(body) != 0 {
 						t.Error("final PUT body must be empty")
 					}
-					w.WriteHeader(204)
+					w.WriteHeader(201)
+					fmt.Fprint(w, `{"uri":"gei://archive/guid"}`)
 				}
 				step++
 			})
@@ -432,7 +466,16 @@ func TestAPIUploadFailures(t *testing.T) {
 					return
 				}
 				w.Header().Set("Location", "/organizations/7/gei/archive/blobs/uploads/guid")
-				if r.Method != "POST" {
+				if r.Method == "POST" && (mode == "changed-file" || mode == "truncated-file") {
+					newData := []byte("longer content")
+					if mode == "truncated-file" {
+						newData = nil
+					}
+					if err := os.WriteFile(file, newData, 0600); err != nil {
+						t.Error(err)
+					}
+				}
+				if r.Method != "PUT" {
 					return
 				}
 				switch mode {
@@ -449,15 +492,6 @@ func TestAPIUploadFailures(t *testing.T) {
 				case "fragment-uri":
 					fmt.Fprint(w, `{"uri":"gei://archive/guid#secret"}`)
 				default:
-					if mode == "changed-file" || mode == "truncated-file" {
-						newData := []byte("longer content")
-						if mode == "truncated-file" {
-							newData = nil
-						}
-						if err := os.WriteFile(file, newData, 0600); err != nil {
-							t.Error(err)
-						}
-					}
 					fmt.Fprint(w, `{"uri":"gei://archive/guid"}`)
 				}
 			})

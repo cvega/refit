@@ -90,14 +90,19 @@ func PushStagingLFS(ctx context.Context, work, token string) error {
 		return err
 	}
 	repo := filepath.Join(root, "git", filepath.FromSlash(prepared.Repository))
-	if len(prepared.Report.LFSObjects) == 0 {
-		return WriteJSON(filepath.Join(root, "lfs-uploaded.json"), stage)
+	if len(prepared.Report.LFSObjects) != 0 {
+		if err := pushLFSPayloads(ctx, repo, targetURL, token, prepared.Report.LFSObjects); err != nil {
+			return err
+		}
 	}
-	if err := pushLFSPayloads(ctx, repo, targetURL, token, prepared.Report.LFSObjects); err != nil {
-		return err
-	}
-	if _, err := os.Stat(filepath.Join(root, "lfs-uploaded.json")); err == nil {
+	var receipt Staging
+	if err := ReadJSON(filepath.Join(root, "lfs-uploaded.json"), &receipt); err == nil {
+		if receipt != stage {
+			return errors.New("LFS upload receipt conflicts with the staging destination")
+		}
 		return nil
+	} else if _, statErr := os.Lstat(filepath.Join(root, "lfs-uploaded.json")); !os.IsNotExist(statErr) {
+		return errors.New("cannot read LFS upload receipt")
 	}
 	return WriteJSON(filepath.Join(root, "lfs-uploaded.json"), stage)
 }
@@ -111,4 +116,27 @@ func pushLFSPayloads(ctx context.Context, repo, targetURL, token string, oids []
 		return gitFailure(ctx, "staging LFS upload")
 	}
 	return nil
+}
+
+func FetchSourceLFS(ctx context.Context, repo, sourceURL, token string) error {
+	parsed, err := url.Parse(sourceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawPath != "" || len(strings.Split(strings.Trim(parsed.Path, "/"), "/")) != 2 || token == "" {
+		return errors.New("LFS fetch requires a source HTTPS repository URL and GH_SOURCE_PAT")
+	}
+	if _, err := gitScan(ctx, repo, DefaultThreshold); err != nil {
+		return err
+	}
+	sourceURL = strings.TrimSuffix(strings.TrimSuffix(sourceURL, "/"), ".git") + ".git"
+	return fetchSourceLFSPayloads(ctx, repo, sourceURL, token)
+}
+
+func fetchSourceLFSPayloads(ctx context.Context, repo, sourceURL, token string) error {
+	cmd := gitCommand(ctx, repo, "-c", "credential.helper=", "-c", "remote.origin.url="+sourceURL, "-c", "lfs.url="+sourceURL+"/info/lfs", "lfs", "fetch", "--all", "origin")
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http."+sourceURL+"/.extraheader", "GIT_CONFIG_VALUE_0=Authorization: Basic "+base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)))
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Run(); err != nil {
+		return gitFailure(ctx, "source LFS fetch (Git refs were not fetched)")
+	}
+	_, err := VerifyLFS(ctx, repo)
+	return err
 }

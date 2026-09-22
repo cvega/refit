@@ -202,6 +202,56 @@ func (a *API) migrationURL(org string, id int64, suffix string) (string, error) 
 	return a.endpoint(path + suffix)
 }
 
+func (a *API) CheckMigrationAccess(ctx context.Context, org string, destination bool) error {
+	endpoint, err := a.endpoint("/user")
+	if err != nil {
+		return err
+	}
+	response, err := a.request(ctx, http.MethodGet, endpoint, nil, true, "")
+	if err != nil {
+		return err
+	}
+	scopes := make(map[string]bool)
+	for _, scope := range strings.Split(response.Header.Get("X-OAuth-Scopes"), ",") {
+		scopes[strings.TrimSpace(scope)] = true
+	}
+	var user struct {
+		Login string `json:"login"`
+	}
+	if err := apiDecode(ctx, response, &user); err != nil {
+		return err
+	}
+	if !scopes["repo"] || !scopes["admin:org"] || destination && !scopes["workflow"] {
+		if destination {
+			return errors.New("destination classic PAT requires repo, admin:org, and workflow scopes")
+		}
+		return errors.New("source classic PAT requires repo and admin:org scopes")
+	}
+	organization, err := apiSegment(org)
+	if err != nil {
+		return err
+	}
+	login, err := apiSegment(user.Login)
+	if err != nil {
+		return err
+	}
+	endpoint, err = a.endpoint("/orgs/" + organization + "/memberships/" + login)
+	if err != nil {
+		return err
+	}
+	var membership struct {
+		State string `json:"state"`
+		Role  string `json:"role"`
+	}
+	if err := a.jsonRequest(ctx, http.MethodGet, endpoint, nil, &membership); err != nil {
+		return err
+	}
+	if membership.State != "active" || membership.Role != "admin" {
+		return errors.New("automated migration requires an active organization owner")
+	}
+	return nil
+}
+
 // Export starts exactly one export; non-idempotent operations are never retried.
 func (a *API) Export(ctx context.Context, org, repo, kind string) (int64, error) {
 	if _, err := apiSegment(repo); err != nil {
@@ -403,14 +453,10 @@ func (a *API) Upload(ctx context.Context, orgID int64, file string) (string, err
 		return "", err
 	}
 	location := resp.Header.Get("Location")
-	var result struct {
-		URI string `json:"uri"`
-	}
-	if err := apiDecode(ctx, resp, &result); err != nil {
-		return "", err
-	}
-	if !a.archiveURI(result.URI) {
-		return "", errors.New("invalid archive URI")
+	statusErr := apiStatus(resp)
+	_ = resp.Body.Close()
+	if statusErr != nil {
+		return "", statusErr
 	}
 	endpoint, err = a.uploadLocation(origin, prefix, endpoint, location)
 	if err != nil {
@@ -450,9 +496,14 @@ func (a *API) Upload(ctx context.Context, orgID int64, file string) (string, err
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	if err := apiStatus(resp); err != nil {
+	var result struct {
+		URI string `json:"uri"`
+	}
+	if err := apiDecode(ctx, resp, &result); err != nil {
 		return "", err
+	}
+	if !a.archiveURI(result.URI) {
+		return "", errors.New("invalid archive URI")
 	}
 	return result.URI, nil
 }

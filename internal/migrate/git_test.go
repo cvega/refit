@@ -104,6 +104,7 @@ func gitTestFixture(t *testing.T) gitFixture {
 	}
 	gitTestExec(t, repo, nil, "config", "remote.origin.url", "https://source.invalid/source.git")
 	gitTestExec(t, repo, nil, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
+	gitTestExec(t, repo, nil, "config", "remote.origin.mirror", "true")
 	// Exercise removal of oversized objects from existing packs, not only loose objects.
 	gitTestExec(t, repo, nil, "repack", "-ad")
 	return f
@@ -251,8 +252,24 @@ func TestGitRewriteUnreachableCleanup(t *testing.T) {
 	}
 }
 
+func TestGitSafeConfigRemoteMirror(t *testing.T) {
+	for _, value := range []string{"true", "false", "TRUE", "FALSE", "invalid", "!command"} {
+		t.Run(value, func(t *testing.T) {
+			config := "[core]\nrepositoryformatversion = 0\nbare = true\n[remote \"origin\"]\nmirror = " + value + "\n"
+			err := gitSafeConfig([]byte(config))
+			valid := strings.EqualFold(value, "true") || strings.EqualFold(value, "false")
+			if (err == nil) != valid {
+				t.Fatalf("mirror value %q: %v", value, err)
+			}
+		})
+	}
+}
+
 func TestGitUnsafeArchivesRejected(t *testing.T) {
 	cases := map[string]func(*testing.T, gitFixture){
+		"remoteCommand": func(t *testing.T, f gitFixture) {
+			gitTestAppend(t, filepath.Join(f.repo, "config"), "\n[remote \"origin\"]\nuploadpack = arbitrary-command\n")
+		},
 		"include": func(t *testing.T, f gitFixture) {
 			gitTestAppend(t, filepath.Join(f.repo, "config"), "\n[include]\npath = /tmp/evil\n")
 		},
@@ -352,6 +369,52 @@ func TestGitNoncommitRefsAndSignedTagsFailClosed(t *testing.T) {
 				t.Fatal("refs changed on preflight failure")
 			}
 		})
+	}
+}
+
+func TestGitSignedObjectsNoop(t *testing.T) {
+	for _, kind := range []string{"gpgsig", "gpgsig-sha256", "signed-tag"} {
+		for _, conversion := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/conversion=%t", kind, conversion), func(t *testing.T) {
+				fixture := gitTestFixture(t)
+				objectType := "commit"
+				body := gitTestExec(t, fixture.repo, nil, "cat-file", "-p", fixture.main) + "\n"
+				if kind == "signed-tag" {
+					objectType = "tag"
+					body = "object " + fixture.main + "\ntype commit\ntag signed\ntagger A <a@example.invalid> 1577836800 +0000\n\nsigned\n-----BEGIN PGP SIGNATURE-----\nnot-a-real-signature\n"
+				} else {
+					body = strings.Replace(body, "\n\n", "\n"+kind+" -----BEGIN SSH SIGNATURE-----\n not-a-real-signature\n -----END SSH SIGNATURE-----\n\n", 1)
+				}
+				objectID := gitTestExec(t, fixture.repo, []byte(body), "hash-object", "-t", objectType, "-w", "--stdin")
+				gitTestExec(t, fixture.repo, nil, "update-ref", "refs/custom/signed", objectID)
+				before := mustGitScan(t, fixture.repo)
+				threshold := DefaultThreshold
+				if conversion {
+					threshold = 512
+				}
+				report, err := RewriteGit(context.Background(), fixture.repo, threshold, fixture.mapPath)
+				if conversion {
+					if err == nil || !strings.Contains(err.Error(), "signature policy") {
+						t.Fatalf("signed rewrite was not rejected: %v", err)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					for oldID, newID := range report.CommitMap {
+						if oldID != newID {
+							t.Fatal("no-op changed commit identity")
+						}
+					}
+				}
+				if !reflect.DeepEqual(before.Refs, mustGitScan(t, fixture.repo).Refs) {
+					t.Fatal("signed object refs changed")
+				}
+				if gitTestExec(t, fixture.repo, nil, "cat-file", "-p", objectID) != strings.TrimSpace(body) {
+					t.Fatal("signed object content changed")
+				}
+			})
+		}
 	}
 }
 
