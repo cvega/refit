@@ -282,9 +282,6 @@ func gitSafety(ctx context.Context, repo string) error {
 		case "shallow", "info/grafts", "objects/info/alternates", "objects/info/http-alternates", "commondir", "gitdir", "worktrees", "config.worktree", "refs/replace", "refs/notes":
 			return errors.New("unsupported Git layout: alternates, shallow/grafted/replaced history, notes or worktrees")
 		}
-		if strings.HasSuffix(rel, ".promisor") || strings.HasSuffix(rel, ".lock") {
-			return errors.New("partial clones and locked repositories are unsupported")
-		}
 		return nil
 	}); err != nil {
 		return err
@@ -604,6 +601,13 @@ func RewriteGit(ctx context.Context, repo string, threshold int64, mapPath strin
 	}
 	if _, err := os.Lstat(objectMapPath); !os.IsNotExist(err) {
 		return result, errors.New("object map destination must not exist")
+	}
+	promisors, err := filepath.Glob(filepath.Join(repo, "objects", "pack", "*.promisor"))
+	if err != nil {
+		return result, err
+	}
+	if len(promisors) != 0 {
+		return result, errors.New("rewriting promisor-pack repositories is unsupported; a complete archive is required")
 	}
 	if err := gitRun(ctx, repo, nil, io.Discard, "fsck", "--full", "--no-reflogs"); err != nil {
 		return result, err

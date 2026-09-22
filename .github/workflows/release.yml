@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -45,7 +45,7 @@ jobs:
       contents: write
     env:
       GOTOOLCHAIN: local
-      CGO_ENABLED: '0'
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v7
         with:

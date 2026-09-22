@@ -4,16 +4,16 @@ Use `migrate` for the normal workflow. Refit handles exports, waiting, preparati
 private import, and LFS transfer; you review the metadata policy and final result.
 The source stays unchanged. Production promotion is not part of this tool.
 
-| I want to... | Start here |
-| --- | --- |
-| Install Refit | [Get a binary](#install-a-release) |
-| Migrate a repository | [First migration](#automated-workflow) |
-| Use an already-reviewed policy | [Run straight through](#i-already-have-a-reviewed-policy) |
-| Continue an interrupted run | [Resume](#resume-a-migration) |
-| Try again from scratch | [Start fresh](#start-fresh) |
-| Use GHES, data residency, or my own LFS cache | [Other setups](#other-setups) |
-| Understand a pause or error | [Troubleshooting](#recovery-and-limitations) |
-| Check the imported repository | [Final review](#review-the-result) |
+| I want to...                                  | Start here                                                |
+| --------------------------------------------- | --------------------------------------------------------- |
+| Install Refit                                 | [Get a binary](#install-a-release)                        |
+| Migrate a repository                          | [First migration](#automated-workflow)                    |
+| Use an already-reviewed policy                | [Run straight through](#i-already-have-a-reviewed-policy) |
+| Continue an interrupted run                   | [Resume](#resume-a-migration)                             |
+| Try again from scratch                        | [Start fresh](#start-fresh)                               |
+| Use GHES, data residency, or my own LFS cache | [Other setups](#other-setups)                             |
+| Understand a pause or error                   | [Troubleshooting](#recovery-and-limitations)              |
+| Check the imported repository                 | [Final review](#review-the-result)                        |
 
 Examples assume `refit` is on your PATH. Use `./refit` instead when running the
 extracted binary directly, or `./bin/refit` for a source build. Replace uppercase
@@ -77,10 +77,10 @@ Existing releases are not overwritten by workflow retries.
 - Install Git and Git LFS: `git --version` and `git lfs version` must work.
 - Provide classic PATs through your secure environment or secret manager:
 
-| Environment variable | Required scopes | Account access |
-| --- | --- | --- |
-| `GH_SOURCE_PAT` | `repo`, `admin:org` | Active source organization owner |
-| `GH_PAT` | `repo`, `admin:org`, `workflow` | Active destination organization owner |
+| Environment variable | Required scopes                 | Account access                        |
+| -------------------- | ------------------------------- | ------------------------------------- |
+| `GH_SOURCE_PAT`      | `repo`, `admin:org`             | Active source organization owner      |
+| `GH_PAT`             | `repo`, `admin:org`, `workflow` | Active destination organization owner |
 
 Never paste tokens into command arguments, URLs, policy files, or shell history.
 Refit checks access before exporting; it does not save credentials. Delegated
@@ -187,35 +187,35 @@ migration or delete its destination. Preserve old archives and receipts.
 
 Set source/destination options on the **first** invocation; resume using `-work`.
 
-| Situation | What to change |
-| --- | --- |
-| GHES source | Use `-source-url https://HOST/ORG/REPO -source-api https://HOST/api/v3`. |
-| Data-resident GHEC destination | Supply approved `-target-api` and `-upload-api` origins. Confirm the upload origin with GitHub; do not derive it. |
-| Exact feature-flag boundary differs | Set `-threshold-bytes BYTES`. Default: 1,000,000,000; equality is allowed. No public 400 MiB limit is imposed. |
-| Existing LFS on the standard source endpoint | No extra flag: `migrate` fetches payloads from the explicit source URL, not archived config. |
-| Custom LFS service or existing local cache | Add `-lfs-objects /absolute/path/to/lfs/objects`, containing `aa/bb/full-sha256` entries. This can also be supplied on resume. |
-| Larger extraction budget needed | Set `-max-extracted-bytes` and `-max-files` deliberately before starting. Defaults: 200 GiB and 2,000,000 members per archive. |
+| Situation                                    | What to change                                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| GHES source                                  | Use `-source-url https://HOST/ORG/REPO -source-api https://HOST/api/v3`.                                                       |
+| Data-resident GHEC destination               | Supply approved `-target-api` and `-upload-api` origins. Confirm the upload origin with GitHub; do not derive it.              |
+| Exact feature-flag boundary differs          | Set `-threshold-bytes BYTES`. Default: 1,000,000,000; equality is allowed. No public 400 MiB limit is imposed.                 |
+| Existing LFS on the standard source endpoint | No extra flag: `migrate` fetches payloads from the explicit source URL, not archived config.                                   |
+| Custom LFS service or existing local cache   | Add `-lfs-objects /absolute/path/to/lfs/objects`, containing `aa/bb/full-sha256` entries. This can also be supplied on resume. |
+| Larger extraction budget needed              | Set `-max-extracted-bytes` and `-max-files` deliberately before starting. Defaults: 200 GiB and 2,000,000 members per archive. |
 
 Source URLs use `https://HOST/ORG/REPO`, without `.git` or a trailing slash.
 Custom endpoints authorize sending the corresponding PAT to that endpoint.
 
 ## Recovery And Limitations
 
-| What you see | What to do next |
-| --- | --- |
-| Missing `GH_SOURCE_PAT` or `GH_PAT` | Set them securely in the terminal running Refit, then resume. |
-| Missing scopes or owner access | Correct the classic PAT/access using the table above, then resume. |
-| Policy review required or policy not reviewed | Review both archives, then resume with `-policy PATH`. |
-| Preparation complete, approval required | Review the route and destination automation, then resume with both approval flags. |
-| Wait timed out, connection interrupted, or Ctrl-C | Resume with the same `-work`; remote work may still be running. |
-| Destination already exists | Do not delete it blindly. Reconcile any prior import; for a separate trial use a new work directory and destination name. |
-| Workflow is locked | Check for an active process. Only after confirming none exists, remove a stale `migration.lock` and resume. |
-| Unresolved export/staging attempt | Inspect GitHub export/import status and destination activity. Preserve attempt files; do not remove them to force resubmission. |
-| Original exists without a completed download record | Reconcile the file and export. Do not overwrite the original. |
-| Missing or corrupt LFS data | Check source access or supply a verified cache with `-lfs-objects`, then resume. |
-| Preparation fails | Fix the reported policy/layout/cache issue, then resume; `migrate` creates a fresh disposable preparation. |
-| Import fails or validation fails | Read the destination Migration Log when available and GitHub migration status. Re-running cannot repair a terminal remote failure. |
-| Unsupported layout or signed history requires conversion | Stop and review the [supported layouts](#supported-layouts); do not bypass the check with policy approval. |
+| What you see                                             | What to do next                                                                                                                    |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Missing `GH_SOURCE_PAT` or `GH_PAT`                      | Set them securely in the terminal running Refit, then resume.                                                                      |
+| Missing scopes or owner access                           | Correct the classic PAT/access using the table above, then resume.                                                                 |
+| Policy review required or policy not reviewed            | Review both archives, then resume with `-policy PATH`.                                                                             |
+| Preparation complete, approval required                  | Review the route and destination automation, then resume with both approval flags.                                                 |
+| Wait timed out, connection interrupted, or Ctrl-C        | Resume with the same `-work`; remote work may still be running.                                                                    |
+| Destination already exists                               | Do not delete it blindly. Reconcile any prior import; for a separate trial use a new work directory and destination name.          |
+| Workflow is locked                                       | Check for an active process. Only after confirming none exists, remove a stale `migration.lock` and resume.                        |
+| Unresolved export/staging attempt                        | Inspect GitHub export/import status and destination activity. Preserve attempt files; do not remove them to force resubmission.    |
+| Original exists without a completed download record      | Reconcile the file and export. Do not overwrite the original.                                                                      |
+| Missing or corrupt LFS data                              | Check source access or supply a verified cache with `-lfs-objects`, then resume.                                                   |
+| Preparation fails                                        | Fix the reported policy/layout/cache issue, then resume; `migrate` creates a fresh disposable preparation.                         |
+| Import fails or validation fails                         | Read the destination Migration Log when available and GitHub migration status. Re-running cannot repair a terminal remote failure. |
+| Unsupported layout or signed history requires conversion | Stop and review the [supported layouts](#supported-layouts); do not bypass the check with policy approval.                         |
 
 Saved valid receipts recover missing completion checkpoints. When no receipt
 exists, a lost response may still mean GitHub accepted the operation; reconcile
@@ -253,11 +253,11 @@ For example, suppose conversion changes commit `OLD` to `NEW` (short labels here
 not actual SHAs). A PR's head-commit field should become `NEW`. A comment quoting
 `OLD` may need to remain exactly as written. The rules distinguish those cases:
 
-| Rule | Use it for | What Refit does |
-| --- | --- | --- |
-| `commit` | A field containing a full commit SHA | Looks up its replacement in the generated commit map. |
-| `commit-url` | A URL with a full commit SHA as a path segment | Updates that commit segment using the map. |
-| `preserve` | Reviewed text or values that must not be remapped | Leaves the value unchanged, even if it contains a hash. |
+| Rule         | Use it for                                        | What Refit does                                         |
+| ------------ | ------------------------------------------------- | ------------------------------------------------------- |
+| `commit`     | A field containing a full commit SHA              | Looks up its replacement in the generated commit map.   |
+| `commit-url` | A URL with a full commit SHA as a path segment    | Updates that commit segment using the map.              |
+| `preserve`   | Reviewed text or values that must not be remapped | Leaves the value unchanged, even if it contains a hash. |
 
 This avoids two mistakes: leaving structural references pointing at replaced
 commits, and changing historical discussion or unrelated hashes. Unknown JSON
@@ -267,14 +267,14 @@ than being guessed. Policy approval does not guarantee GEI importer compatibilit
 ### What You Need To Review
 
 1. Start from [policy.example.json](../policy.example.json). Its `git` and
-  `metadata` sections describe the two archives; the Git archive can contain JSON too.
+   `metadata` sections describe the two archives; the Git archive can contain JSON too.
 2. List every JSON file outside Git internals by its exact archive-relative path.
-  For each commit-bearing field, choose the appropriate rule above. Use an empty
-  rule list only after checking the file needs no commit-reference rules.
+   For each commit-bearing field, choose the appropriate rule above. Use an empty
+   rule list only after checking the file needs no commit-reference rules.
 3. Set both sections' `reviewed` fields to `true` only after reviewing the schema.
-  Do not apply blanket `preserve` rules to get past an error.
+   Do not apply blanket `preserve` rules to get past an error.
 4. Resume with `refit migrate -work work/MIGRATION -policy reviewed-policy.json`.
-  Add staging approval flags when ready to import.
+   Add staging approval flags when ready to import.
 
 You can reuse a policy when the filenames, schema, and field meanings still match;
 it is not tied to one set of commit IDs. Check compatibility with each archive pair.

@@ -265,6 +265,37 @@ func TestGitSafeConfigRemoteMirror(t *testing.T) {
 	}
 }
 
+func TestGitInspectArchiveMarkers(t *testing.T) {
+	for _, path := range []string{"objects/pack/archive.promisor", "packed-refs.lock", "hooks/export.lock", "hooks/export.promisor"} {
+		t.Run(path, func(t *testing.T) {
+			fixture := gitTestFixture(t)
+			before, err := InspectGit(context.Background(), fixture.repo, 512)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gitTestWrite(t, filepath.Join(fixture.repo, path), nil)
+			after, err := InspectGit(context.Background(), fixture.repo, 512)
+			if err != nil {
+				t.Fatalf("inspection rejected archive marker: %v", err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("archive marker changed the inventory")
+			}
+			if _, err := os.Stat(filepath.Join(fixture.repo, path)); err != nil {
+				t.Fatalf("inspection changed archive entry: %v", err)
+			}
+		})
+	}
+}
+
+func TestGitRewritePromisorPacksRejected(t *testing.T) {
+	fixture := gitTestFixture(t)
+	gitTestWrite(t, filepath.Join(fixture.repo, "objects/pack/archive.promisor"), nil)
+	if _, err := RewriteGit(context.Background(), fixture.repo, 512, fixture.mapPath); err == nil || !strings.Contains(err.Error(), "promisor-pack") {
+		t.Fatalf("expected rewrite-specific promisor error: %v", err)
+	}
+}
+
 func TestGitUnsafeArchivesRejected(t *testing.T) {
 	cases := map[string]func(*testing.T, gitFixture){
 		"remoteCommand": func(t *testing.T, f gitFixture) {
@@ -300,9 +331,6 @@ func TestGitUnsafeArchivesRejected(t *testing.T) {
 		},
 		"worktree": func(t *testing.T, f gitFixture) {
 			gitTestWrite(t, filepath.Join(f.repo, "commondir"), []byte("/tmp/other\n"))
-		},
-		"promisor": func(t *testing.T, f gitFixture) {
-			gitTestWrite(t, filepath.Join(f.repo, "objects/pack/archive.promisor"), nil)
 		},
 		"replacePacked": func(t *testing.T, f gitFixture) {
 			gitTestExec(t, f.repo, nil, "update-ref", "refs/replace/"+f.main, f.hidden)
