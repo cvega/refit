@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Install Git LFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes git-lfs
+      - name: Validate
+        run: |
+          go version
+          go test ./...
+          go test -race ./...
+          go vet ./...
+
+  package:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Package binaries
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          go version
+          mkdir -p dist
+          package_dir=$(mktemp -d)
+          trap 'rm -rf "$package_dir"' EXIT
+          cp README.md policy.example.json "$package_dir/"
+          cp -R docs "$package_dir/docs"
+          for target_os in darwin linux; do
+            for target_arch in amd64 arm64; do
+              GOOS="$target_os" GOARCH="$target_arch" go build -trimpath -o "$package_dir/refit" ./cmd/refit
+              tar -czf "dist/refit_${TAG}_${target_os}_${target_arch}.tar.gz" -C "$package_dir" refit README.md policy.example.json docs
+            done
+          done
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+          go build -trimpath -o "$RUNNER_TEMP/refit" ./cmd/refit
+          "$RUNNER_TEMP/refit" help
+      - name: Create draft preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --verify-tag --draft --prerelease \
+            --title "Refit $TAG" --generate-notes

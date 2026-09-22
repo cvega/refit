@@ -9,8 +9,9 @@ copies are rewritten. Production promotion is outside this tool's scope.
 
 Use a trusted machine, private local storage, and enough space for the originals,
 extractions, temporary Git packs, LFS payloads, rewritten archives, and a validation
-extraction. Do not run concurrent operations against the same workspace. Build
-the CLI using the README command. Commands below assume it is on your PATH.
+extraction. Do not run concurrent operations against the same workspace. Install
+a release below or build from source using the README. Workflow commands assume
+`refit` is on your PATH; otherwise use the extracted binary's path.
 
 Provide `GH_SOURCE_PAT` and `GH_PAT` through your secure environment or secret
 manager. Do not place tokens in command arguments, URLs, policy files, or shell
@@ -31,6 +32,54 @@ The default threshold is **1,000,000,000 bytes**, inclusive as an allowed size.
 Use `-threshold-bytes` if its exact boundary differs. No public 400 MiB restriction
 is applied. Separately confirm the destination's LFS single-object and storage
 limits; moving a blob to LFS does not exempt it from LFS limits.
+
+## Install A Release
+
+Download a binary archive and `SHA256SUMS` from
+[Releases](https://github.com/cvega/refit/releases), not GitHub's automatically
+generated source archives. Until the first release is published, use the README's
+source-build command. Published binaries do not require Go; Git and Git LFS are
+still runtime dependencies.
+
+Choose `darwin` for macOS or `linux` for Linux, and `arm64` for Apple Silicon/ARM64
+or `amd64` for Intel/AMD x86-64. Windows binaries are not currently provided.
+Archive names follow `refit_VERSION_OS_ARCH.tar.gz`.
+
+For example, after downloading a macOS Apple Silicon release (replace the version):
+
+```sh
+VERSION=v0.1.0
+ARCHIVE="refit_${VERSION}_darwin_arm64.tar.gz"
+awk -v file="./$ARCHIVE" '$2 == file' SHA256SUMS > selected.sha256
+test -s selected.sha256 && shasum -a 256 -c selected.sha256 && tar -xzf "$ARCHIVE"
+./refit help
+```
+
+On Linux, use `sha256sum -c selected.sha256` instead. Extract into a new directory;
+archives include the executable, README, runbook, and unreviewed policy example.
+Checksums detect corruption, not publisher identity. macOS binaries are not
+Developer ID signed or notarized; managed devices may require administrator approval.
+Do not disable platform security controls to run them.
+
+### Publishing A Release
+
+The Release workflow runs on pushed `v*` tags, tests the tagged commit with
+`go test ./...`, `go test -race ./...`, and `go vet ./...`, then cross-compiles
+macOS/Linux amd64/arm64 binaries and creates a **draft prerelease** with checksums.
+Only the Linux runner's native binary receives a smoke test; cross-compilation
+does not establish runtime compatibility on every target.
+
+After committing and pushing the reviewed release changes, a maintainer can run:
+
+```sh
+git tag -a v0.1.0 -m "Refit v0.1.0 preview"
+git push origin v0.1.0
+```
+
+Review the draft's notes and assets, verify downloaded binaries on intended
+platforms, and publish it explicitly in GitHub Releases. Keep preview status and
+the README's validation limitations until broader live validation is complete.
+Existing releases are not overwritten by workflow retries.
 
 ## Automated Workflow
 
