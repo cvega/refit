@@ -1,37 +1,23 @@
-# Refit: Archive-First Staging Migration
+# Refit How-To
 
-## Scope And Prerequisites
+Use `migrate` for the normal workflow. Refit handles exports, waiting, preparation,
+private import, and LFS transfer; you review the metadata policy and final result.
+The source stays unchanged. Production promotion is not part of this tool.
 
-This adapts the [LFS migration procedure](https://gist.github.com/cvega/6cb161bb9c642c9f3d4b232ed4e3f39d)
-to migration archives. A network mirror clone cannot substitute for archived
-hidden history. The source stays unchanged; only newly extracted disposable
-copies are rewritten. Production promotion is outside this tool's scope.
+| I want to... | Start here |
+| --- | --- |
+| Install Refit | [Get a binary](#install-a-release) |
+| Migrate a repository | [First migration](#automated-workflow) |
+| Use an already-reviewed policy | [Run straight through](#i-already-have-a-reviewed-policy) |
+| Continue an interrupted run | [Resume](#resume-a-migration) |
+| Try again from scratch | [Start fresh](#start-fresh) |
+| Use GHES, data residency, or my own LFS cache | [Other setups](#other-setups) |
+| Understand a pause or error | [Troubleshooting](#recovery-and-limitations) |
+| Check the imported repository | [Final review](#review-the-result) |
 
-Use a trusted machine, private local storage, and enough space for the originals,
-extractions, temporary Git packs, LFS payloads, rewritten archives, and a validation
-extraction. Do not run concurrent operations against the same workspace. Install
-a release below or build from source using the README. Workflow commands assume
-`refit` is on your PATH; otherwise use the extracted binary's path.
-
-Provide `GH_SOURCE_PAT` and `GH_PAT` through your secure environment or secret
-manager. Do not place tokens in command arguments, URLs, policy files, or shell
-history. API errors suppress server bodies and signed download URLs. Use approved
-source/destination endpoints; setting an API endpoint authorizes sending that
-endpoint the corresponding token.
-
-The source can be GHES or GHEC; the destination is GHEC. For GHES, set
-`SOURCE_API=https://HOST/api/v3`; for GitHub.com, use
-`SOURCE_API=https://api.github.com`. The public API documentation describes archive
-ingestion for GHES. Confirm the custom rewritten-archive route, especially a GHEC
-export ingested as `GITHUB_ARCHIVE`, with the customer's migration team before
-using `-archive-route-reviewed`. That flag records operator approval, not proof
-of importer compatibility.
-
-Confirm the customer's 1 GB feature flag is enabled for the destination import.
-The default threshold is **1,000,000,000 bytes**, inclusive as an allowed size.
-Use `-threshold-bytes` if its exact boundary differs. No public 400 MiB restriction
-is applied. Separately confirm the destination's LFS single-object and storage
-limits; moving a blob to LFS does not exempt it from LFS limits.
+Examples assume `refit` is on your PATH. Use `./refit` instead when running the
+extracted binary directly, or `./bin/refit` for a source build. Replace uppercase
+placeholders with your values; keep using the same terminal for your credentials.
 
 ## Install A Release
 
@@ -61,7 +47,8 @@ Checksums detect corruption, not publisher identity. macOS binaries are not
 Developer ID signed or notarized; managed devices may require administrator approval.
 Do not disable platform security controls to run them.
 
-### Publishing A Release
+<details>
+<summary>For maintainers: publish a release</summary>
 
 The Release workflow runs on pushed `v*` tags, tests the tagged commit with
 `go test ./...`, `go test -race ./...`, and `go vet ./...`, then cross-compiles
@@ -81,17 +68,77 @@ platforms, and publish it explicitly in GitHub Releases. Keep preview status and
 the README's validation limitations until broader live validation is complete.
 Existing releases are not overwritten by workflow retries.
 
+</details>
+
 ## Automated Workflow
 
-Use classic PATs in `GH_SOURCE_PAT` and `GH_PAT`. The automated command requires
-active organization-owner access: source scopes `repo`, `admin:org`; destination
-scopes `repo`, `admin:org`, `workflow`. It checks these before exporting or uploading.
-Delegated migrator roles are not supported by this preflight; use the individual
-commands below for a separately reviewed delegated-access workflow.
+### 1. Get Ready
 
-Coordinate a quiet source window throughout both exports. They are not atomic,
-and the tool does not lock the source. Review the archive route and ensure
-destination automation will remain inactive before granting staging approval.
+- Install Git and Git LFS: `git --version` and `git lfs version` must work.
+- Provide classic PATs through your secure environment or secret manager:
+
+| Environment variable | Required scopes | Account access |
+| --- | --- | --- |
+| `GH_SOURCE_PAT` | `repo`, `admin:org` | Active source organization owner |
+| `GH_PAT` | `repo`, `admin:org`, `workflow` | Active destination organization owner |
+
+Never paste tokens into command arguments, URLs, policy files, or shell history.
+Refit checks access before exporting; it does not save credentials. Delegated
+migrator roles are not supported by this automatic preflight.
+
+- Arrange a quiet source window for both exports. Refit does not lock the source;
+  the two exports are not an atomic snapshot.
+- Use private local storage with room for archives, extracted copies, and LFS data.
+- Confirm the destination's 1 GB Git feature flag and separate LFS storage/object limits.
+- Choose a **new** name ending in `-staging`. Do not create the repository yourself.
+
+### 2. Start Your First Migration
+
+Start without a policy or import approval so you can review the actual archives:
+
+```sh
+refit migrate -work work/MIGRATION \
+  -source-url https://github.com/SOURCE_ORG/REPO \
+  -target-org DEST_ORG -staging-repo REPO-staging
+```
+
+**What happens:** Refit exports, waits, downloads, and inspects. It then exits with
+`metadata policy review required`. This is the expected review gate, not a failed
+import. Nothing has been imported yet. Originals and progress are in `work/MIGRATION`.
+
+### 3. Review The Policy And Approve Staging
+
+A policy tells Refit **which metadata fields should follow rewritten commits and
+which should stay unchanged**. Moving a blob to LFS changes commit IDs; PRs and
+reviews may still reference the old IDs. The policy lets Refit update those
+references without blindly replacing hashes in comments or unrelated fields.
+
+1. Copy [policy.example.json](../policy.example.json) to `reviewed-policy.json`.
+2. Review the JSON schema in **both** downloaded originals with a trusted archive
+   viewer. Define rules using [the policy guide](#review-a-metadata-policy).
+   Merely changing `reviewed` to `true` is not sufficient.
+3. Confirm the rewritten-archive route with your migration team, especially for
+   GHEC exports. Ensure destination Actions, Pages, webhooks, and other automation
+   stay inactive until reviewed; private visibility alone does not disable them.
+4. Continue using the same work directory:
+
+```sh
+refit migrate -work work/MIGRATION -policy reviewed-policy.json \
+  -confirm-staging -archive-route-reviewed
+```
+
+**What happens:** Refit fetches existing LFS payloads, prepares and verifies the
+archives, creates the private staging import, waits for success, and uploads LFS.
+No Git refs are fetched or pushed to the source. A successful run ends with
+`"state":"SUCCEEDED"` and `"review":"required"`. Finish with [staging review](#review-the-result).
+
+To review prepared output before authorizing import, supply `-policy` but omit
+the approval flags. Refit pauses after preparation; add the flags when ready.
+
+### I Already Have A Reviewed Policy
+
+If your policy applies to the actual archive schema and staging is approved, run
+the complete workflow in one command:
 
 ```sh
 refit migrate -work work/MIGRATION \
@@ -101,99 +148,149 @@ refit migrate -work work/MIGRATION \
   -confirm-staging -archive-route-reviewed
 ```
 
-For GHES, additionally supply `-source-api https://HOST/api/v3` and its matching
-source repository URL. For a data-residency destination, explicitly supply the
-approved `-target-api` and `-upload-api` origins. Source URLs use the web form,
-without a `.git` suffix. Endpoints authorize sending the corresponding PAT.
+## Resume A Migration
 
-The command saves configuration and export IDs, waits, downloads immutable originals,
-inspects archived history, fetches existing LFS payloads without cloning or fetching
-Git refs, prepares and verifies rewritten archives, submits the private import,
-waits for success, and uploads LFS. Payload downloads use the explicit source
-repository's standard LFS endpoint; use `-lfs-objects PATH` for an operator-provided
-cache if the source uses a different LFS service. The final staging review and
-Migration Log review remain manual; production promotion is never performed.
-
-If the archive schema is not reviewed yet, omit `-policy`. Refit stops after
-downloading and inspecting; review both original archives as described below,
-then resume with `-policy PATH`. Without the two approval flags it stops after
-preparation, before import. Approvals and policy/cache paths supplied on resume
-are saved, but credentials are not.
+Use the same terminal credentials and work directory:
 
 ```sh
 refit migrate -work work/MIGRATION
-# At a review gate, add the missing reviewed inputs:
-refit migrate -work work/MIGRATION -policy reviewed-policy.json \
-  -confirm-staging -archive-route-reviewed
 ```
 
-Ordinary resumes need only `-work`; do not repeat source/destination flags.
-Each export/import wait defaults to 30 minutes with 10-second progress checks.
-Use `-wait-timeout` and `-poll-interval` to adjust. Interrupting or timing out does
-not cancel remote work. Resume uses saved IDs and completed checkpoints. Failed
-local preparations use fresh disposable directories, leaving diagnostics intact.
+Completed steps and saved export/import IDs are reused. Do not repeat source or
+destination flags. Keep the work directory at its original path and run only one
+process against it. Policy/cache paths and approvals supplied on resume are saved.
 
-Keep the workflow directory at its original path. `migration.lock` excludes
-concurrent runs; after a hard crash, verify no process is active before removing
-only the stale lock. An attempt without a saved export/import receipt is an
-uncertain remote write: automatic retry is blocked. Reconcile against GitHub,
-preserving all attempt files; do not delete them to force another submission.
-Saved valid receipts recover a missing completion checkpoint automatically.
-An interrupted download with an existing original but no completion record also
-requires reconciliation; do not overwrite that original. Export records,
-checksums, prepared-workspace references, and import/LFS receipts stay under `-work`.
-Treat this state as sensitive operational evidence under normal backup controls.
-
-The individual commands below remain available for inspection and explicit recovery.
-
-## 1. Export And Download
-
-Coordinate a quiet source window for the two exports. The CLI deliberately does
-not lock the source. Separate exports are not an atomic snapshot; reject a pair
-if source changes or metadata refers to commits missing from the Git archive.
+Need a longer wait? Each wait defaults to 30 minutes with 10-second status checks:
 
 ```sh
-refit export -source-api "$SOURCE_API" -org SOURCE_ORG -repo REPO -kind git
-refit export -source-api "$SOURCE_API" -org SOURCE_ORG -repo REPO -kind metadata
+refit migrate -work work/MIGRATION -wait-timeout 2h -poll-interval 20s
 ```
 
-Record both returned IDs. Check each until its state is `exported`:
+Interrupting or timing out stops local waiting, **not** the remote migration.
+An uncertain remote write is deliberately not retried; see [troubleshooting](#recovery-and-limitations).
+
+## Start Fresh
+
+Choose **both** a new work directory and a new staging name:
 
 ```sh
-refit export-status -source-api "$SOURCE_API" -org SOURCE_ORG -export-id GIT_ID
-refit export-status -source-api "$SOURCE_API" -org SOURCE_ORG -export-id METADATA_ID
-refit download -source-api "$SOURCE_API" -org SOURCE_ORG -export-id GIT_ID -out original-git.tar.gz
-refit download -source-api "$SOURCE_API" -org SOURCE_ORG -export-id METADATA_ID -out original-metadata.tar.gz
+refit migrate -work work/MIGRATION-2 \
+  -source-url https://github.com/SOURCE_ORG/REPO \
+  -target-org DEST_ORG -staging-repo REPO-retry-staging
 ```
 
-Replace capitalized placeholders with actual values. Downloads require new files,
-stream to disk, and do not forward the source PAT to redirected archive storage.
-Retain originals under your normal immutable storage controls. The CLI never
-deletes remote exports or unlocks repositories.
+This starts new exports and pauses for policy review. Add your reviewed policy
+and approval flags to run straight through. It does not cancel an earlier remote
+migration or delete its destination. Preserve old archives and receipts.
 
-## 2. Inspect And Review The Layout
+## Other Setups
 
-```sh
-refit inspect -git-archive original-git.tar.gz -work inspection
-```
+Set source/destination options on the **first** invocation; resume using `-work`.
 
-This extracts to a new directory, lists each detected bare repository's refs and
-oversized blob OIDs/sizes, and scans all stored Git objects, not just branch tips.
-Review hidden refs such as `refs/pull/*` against the source export's expected
-contents. This tool cannot recover a ref that was not exported.
+| Situation | What to change |
+| --- | --- |
+| GHES source | Use `-source-url https://HOST/ORG/REPO -source-api https://HOST/api/v3`. |
+| Data-resident GHEC destination | Supply approved `-target-api` and `-upload-api` origins. Confirm the upload origin with GitHub; do not derive it. |
+| Exact feature-flag boundary differs | Set `-threshold-bytes BYTES`. Default: 1,000,000,000; equality is allowed. No public 400 MiB limit is imposed. |
+| Existing LFS on the standard source endpoint | No extra flag: `migrate` fetches payloads from the explicit source URL, not archived config. |
+| Custom LFS service or existing local cache | Add `-lfs-objects /absolute/path/to/lfs/objects`, containing `aa/bb/full-sha256` entries. This can also be supplied on resume. |
+| Larger extraction budget needed | Set `-max-extracted-bytes` and `-max-files` deliberately before starting. Defaults: 200 GiB and 2,000,000 members per archive. |
 
-Inspection does not modify Git history. Default extraction budgets are 200 GiB
-decompressed bytes per archive and 2,000,000 logical members. Adjust the
-`-max-extracted-bytes` and `-max-files` flags deliberately for larger exports.
-Never overwrite a previous work directory; use a new name.
+Source URLs use `https://HOST/ORG/REPO`, without `.git` or a trailing slash.
+Custom endpoints authorize sending the corresponding PAT to that endpoint.
 
-Review the metadata archive's JSON schema using a trusted archive viewer. Do not
-assume REST response field names equal migration archive fields. Review every
-commit-bearing field, including PR base/head/merge SHAs, review commit IDs,
-original review positions, commit comments, and commit URLs. References to commits
-outside the exported repository must be understood, not silently reassigned.
+## Recovery And Limitations
 
-## 3. Approve Metadata Rules
+| What you see | What to do next |
+| --- | --- |
+| Missing `GH_SOURCE_PAT` or `GH_PAT` | Set them securely in the terminal running Refit, then resume. |
+| Missing scopes or owner access | Correct the classic PAT/access using the table above, then resume. |
+| Policy review required or policy not reviewed | Review both archives, then resume with `-policy PATH`. |
+| Preparation complete, approval required | Review the route and destination automation, then resume with both approval flags. |
+| Wait timed out, connection interrupted, or Ctrl-C | Resume with the same `-work`; remote work may still be running. |
+| Destination already exists | Do not delete it blindly. Reconcile any prior import; for a separate trial use a new work directory and destination name. |
+| Workflow is locked | Check for an active process. Only after confirming none exists, remove a stale `migration.lock` and resume. |
+| Unresolved export/staging attempt | Inspect GitHub export/import status and destination activity. Preserve attempt files; do not remove them to force resubmission. |
+| Original exists without a completed download record | Reconcile the file and export. Do not overwrite the original. |
+| Missing or corrupt LFS data | Check source access or supply a verified cache with `-lfs-objects`, then resume. |
+| Preparation fails | Fix the reported policy/layout/cache issue, then resume; `migrate` creates a fresh disposable preparation. |
+| Import fails or validation fails | Read the destination Migration Log when available and GitHub migration status. Re-running cannot repair a terminal remote failure. |
+| Unsupported layout or signed history requires conversion | Stop and review the [supported layouts](#supported-layouts); do not bypass the check with policy approval. |
+
+Saved valid receipts recover missing completion checkpoints. When no receipt
+exists, a lost response may still mean GitHub accepted the operation; reconcile
+it before taking further action. Uploaded archives or unused migration sources
+may need operator cleanup. Refit never deletes remote exports or unlocks sources.
+
+## Review The Result
+
+After automatic import **and** LFS upload succeed:
+
+1. Read the destination Migration Log and resolve warnings/errors.
+2. Compare branches, tags, default branch, and available hidden-ref evidence with
+   the preparation report. Importer handling of hidden refs needs live validation.
+3. Check PRs, issues, authors, comments, diffs, deleted branches, and review anchors.
+4. Clone the **destination for validation only**. Run `git fsck --full`, fetch
+   historical LFS with `git lfs fetch --all`, and verify representative revisions
+   and payload SHA-256 hashes, not just the default branch. Hidden-only content
+   may need explicit PR/ref access or GitHub-assisted validation.
+5. Review permissions and disabled automation, then record staging approval.
+   Production promotion is a separate process.
+
+The final JSON names `prepared_work`. Its `report.json` records checksums, refs,
+blob inventory, LFS OIDs, and metadata changes. Keep the entire workflow directory
+private and backed up, including originals, maps, checkpoints, and import/LFS receipts.
+
+## Review A Metadata Policy
+
+### What The Policy Does
+
+Think of the policy as instructions for handling fields, **not a list of commit
+IDs you maintain by hand**. Refit generates the old-to-new commit map during
+preparation and applies your rules to disposable copies of the archives.
+
+For example, suppose conversion changes commit `OLD` to `NEW` (short labels here,
+not actual SHAs). A PR's head-commit field should become `NEW`. A comment quoting
+`OLD` may need to remain exactly as written. The rules distinguish those cases:
+
+| Rule | Use it for | What Refit does |
+| --- | --- | --- |
+| `commit` | A field containing a full commit SHA | Looks up its replacement in the generated commit map. |
+| `commit-url` | A URL with a full commit SHA as a path segment | Updates that commit segment using the map. |
+| `preserve` | Reviewed text or values that must not be remapped | Leaves the value unchanged, even if it contains a hash. |
+
+This avoids two mistakes: leaving structural references pointing at replaced
+commits, and changing historical discussion or unrelated hashes. Unknown JSON
+files, unmapped commit references, or unreviewed full SHAs stop preparation rather
+than being guessed. Policy approval does not guarantee GEI importer compatibility.
+
+### What You Need To Review
+
+1. Start from [policy.example.json](../policy.example.json). Its `git` and
+  `metadata` sections describe the two archives; the Git archive can contain JSON too.
+2. List every JSON file outside Git internals by its exact archive-relative path.
+  For each commit-bearing field, choose the appropriate rule above. Use an empty
+  rule list only after checking the file needs no commit-reference rules.
+3. Set both sections' `reviewed` fields to `true` only after reviewing the schema.
+  Do not apply blanket `preserve` rules to get past an error.
+4. Resume with `refit migrate -work work/MIGRATION -policy reviewed-policy.json`.
+  Add staging approval flags when ready to import.
+
+You can reuse a policy when the filenames, schema, and field meanings still match;
+it is not tied to one set of commit IDs. Check compatibility with each archive pair.
+
+**What if nothing needs conversion?** The current tool still requires a reviewed
+policy. Unchanged commits have identity mappings (old ID equals new ID), so those
+references stay the same. This is a conservative Refit requirement, not a GitHub
+requirement; it does not mean the run needs to rewrite commit IDs.
+
+<details>
+<summary>Policy rules, example, and schema-review checklist</summary>
+
+Review commit-bearing fields: PR base/head/merge SHAs, review commit IDs, original
+review positions, commit comments, and commit URLs. REST response field names are
+not necessarily archive schema fields. Understand references outside the exported
+repository rather than silently reassigning them.
 
 Create a policy for the actual archive schema. The following is an **illustration
 only**, assuming a metadata file `pull_requests.json` containing an array with
@@ -236,7 +333,45 @@ not inferred: schema review must account for them. JSON member ordering and
 whitespace can change in rewritten files; numbers retain their literal precision.
 Non-JSON files are retained and scanned for textual changed full SHAs.
 
-## 4. Prepare Rewritten Archives
+</details>
+
+## Manual Commands
+
+You do **not** need these for a normal `migrate` run. They are for existing archive
+pairs, separately reviewed delegated-access workflows, and operator-led recovery.
+Do not mix manual mutations into an active automated workspace.
+
+<details>
+<summary>Export, inspect, prepare, stage, and upload individually</summary>
+
+### Export And Inspect
+
+Set `SOURCE_API=https://api.github.com`, or `https://HOST/api/v3` for GHES.
+Keep the source quiet for both exports; reject inconsistent archive pairs.
+
+```sh
+refit export -source-api "$SOURCE_API" -org SOURCE_ORG -repo REPO -kind git
+refit export -source-api "$SOURCE_API" -org SOURCE_ORG -repo REPO -kind metadata
+```
+
+Record both IDs. Repeat status checks until each is `exported`, then download:
+
+```sh
+refit export-status -source-api "$SOURCE_API" -org SOURCE_ORG -export-id GIT_ID
+refit export-status -source-api "$SOURCE_API" -org SOURCE_ORG -export-id METADATA_ID
+refit download -source-api "$SOURCE_API" -org SOURCE_ORG -export-id GIT_ID -out original-git.tar.gz
+refit download -source-api "$SOURCE_API" -org SOURCE_ORG -export-id METADATA_ID -out original-metadata.tar.gz
+refit inspect -git-archive original-git.tar.gz -work inspection
+```
+
+Already have both archives? Skip export/download and start with `inspect`.
+Downloads require new files and do not forward the source PAT to storage.
+Inspection requires a new directory and scans all stored objects, including
+unreachable ones. Compare hidden refs such as `refs/pull/*` with expected export
+contents; a network clone cannot recover omitted archive history.
+Review both archives using the [policy guide](#review-a-metadata-policy).
+
+### Prepare And Verify
 
 ```sh
 refit prepare \
@@ -286,7 +421,7 @@ and artifacts. Keep the whole workspace private and immutable between review and
 staging. Verification detects changed output archives, commit-map bytes, local
 refs, oversized objects, and missing/corrupt LFS payloads.
 
-## 5. Import Into Private Staging
+### Import Into Private Staging
 
 Choose a destination name ending in `-staging` or containing `-staging-`.
 **Do not pre-create the repository**: GEI creates it. Existing destinations are
@@ -333,7 +468,7 @@ the migration ID. Import success still requires the separate LFS upload below.
 Use the same `-target-api` when checking a nondefault destination. A successful
 GEI import does not mean LFS content is available yet.
 
-## 6. Upload LFS And Review
+### Upload LFS
 
 ```sh
 refit lfs-push -work prepared -confirm-staging
@@ -346,23 +481,9 @@ history. It never runs `git push`. Destination authentication is supplied throug
 the subprocess environment, not arguments or archived credential helpers. A
 successful upload writes `prepared/lfs-uploaded.json`.
 
-Review before sign-off:
+Then [review the result](#review-the-result) before sign-off.
 
-1. Read the destination Migration Log issue and resolve importer warnings/errors.
-2. Compare branches, tags, default branch, and available hidden-ref evidence with
-   the report. Importer handling of hidden refs requires live validation.
-3. Check PR/issue/review counts, authors, comments, open and closed PRs, diffs,
-   deleted branches, and review anchors on rewritten commits.
-4. Clone the **destination for validation only**, run `git fsck --full`, fetch
-   historical LFS payloads using `git lfs fetch --all`, and run LFS checks. Check
-   representative historical revisions, not only the default branch. Hidden-only
-   content may require explicit PR/ref access or GitHub-assisted validation.
-5. Confirm both existing and newly converted LFS payloads can be downloaded and
-   their contents match the SHA-256 pointer hashes in the preparation report.
-6. Review permissions and disabled automation. Record staging approval; do not
-   promote or redirect users as part of this tool.
-
-## Recovery And Limitations
+### Manual Recovery
 
 A failed preparation may leave a diagnostic extraction but no successful report.
 Correct the layout/policy/cache issue and run preparation into a **new** work
@@ -375,9 +496,16 @@ successful enqueue. Do not blindly remove the attempt file. Uploaded archives an
 unused migration sources may need operator cleanup. Export, enqueue, and upload
 operations are not automatically retried. LFS upload itself can be rerun.
 
+</details>
+
+## Supported Layouts
+
 Supported today: separate single-stream tar.gz archives, regular files/directories,
 one extracted SHA-1 files-backend bare Git repository, and reviewed JSON metadata.
-Unsupported layouts fail closed rather than dropping refs or guessing:
+Unsupported layouts stop the run rather than dropping refs or guessing.
+
+<details>
+<summary>Unsupported archive, Git, LFS, and metadata formats</summary>
 
 - Git bundles, nested compressed archives (including compressed attachments),
   combined Git/metadata input, multiple repositories/wikis, worktrees and gitfiles.
@@ -394,7 +522,12 @@ export is usable. Do not relabel an unsupported layout as reviewed to bypass it.
 GEI's normal metadata exclusions and follow-up tasks still apply; this tool cannot
 promise preservation of data that GEI itself does not migrate.
 
+</details>
+
 ## Verification And References
+
+<details>
+<summary>Test coverage and upstream documentation</summary>
 
 Tests use real Git/Git LFS with small byte thresholds and local HTTP servers.
 They cover hidden/custom/remote refs, exact-threshold behavior, annotated tags,
@@ -405,3 +538,6 @@ customer archive compatibility, real 1 GB resource usage, or live GEI acceptance
 - [REST organization migration API](https://docs.github.com/en/rest/migrations/orgs)
 - [Archive upload and GEI API workflow](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-github-enterprise-server-to-github-enterprise-cloud?tool=api)
 - [GEI migration scope and limitations](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/about-migrations-between-github-products)
+- [Original LFS migration procedure](https://gist.github.com/cvega/6cb161bb9c642c9f3d4b232ed4e3f39d)
+
+</details>
